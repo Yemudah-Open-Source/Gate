@@ -5,6 +5,9 @@
 
 ---
 
+![Screenshot 2025-03-10 at 1 39 06 PM](https://github.com/user-attachments/assets/601093dc-2a4d-4f4e-bb35-b7fcad249651)
+
+
 ### Features of Switch Tool:
 
 1. **Real-time Session Tracking**: 
