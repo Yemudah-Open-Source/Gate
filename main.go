@@ -14,19 +14,75 @@ import (
 	"github.com/rs/cors"
 )
 
-var activeSessions = make(map[string]time.Time) // sessionID -> timestamp of last active page change
-var sessionPages = make(map[string]string)      // sessionID -> active page
-var sessionIPs = make(map[string]string)        // sessionID -> IP address
-var mu sync.Mutex
+var (
+	activeSessions  = make(map[string]time.Time)
+	sessionPages    = make(map[string]string)
+	sessionIPs      = make(map[string]string)
+	sessionDataSize = make(map[string]map[string]int64) // sessionID -> {request_size, response_size}
+	mu              sync.Mutex
+	timeoutChannels = make(map[string]chan struct{})
+	sseClients      = make(map[chan<- string]struct{})
+	templates       = template.Must(template.ParseFiles("templates/index.html"))
+)
 
-// Timeout channels to handle cancellation of individual session timeouts
-var timeoutChannels = make(map[string]chan struct{})
+// Custom response writer to track response size
+type responseWriterWrapper struct {
+	http.ResponseWriter
+	statusCode   int
+	writtenBytes int64
+}
 
-// SSE event channels to push updates to the frontend
-var sseClients = make(map[chan<- string]struct{})
+func (rw *responseWriterWrapper) Write(b []byte) (int, error) {
+	n, err := rw.ResponseWriter.Write(b)
+	rw.writtenBytes += int64(n)
+	return n, err
+}
 
-// Load HTML templates
-var templates = template.Must(template.ParseFiles("templates/index.html"))
+func (rw *responseWriterWrapper) WriteHeader(statusCode int) {
+	rw.statusCode = statusCode
+	rw.ResponseWriter.WriteHeader(statusCode)
+}
+
+
+// Middleware to track request and response size
+func trackTrafficSize(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.URL.Query().Get("session_id")
+		if sessionID == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		requestSize := r.ContentLength
+		wrappedWriter := &responseWriterWrapper{ResponseWriter: w, statusCode: 200}
+
+		// Process the request
+		next.ServeHTTP(wrappedWriter, r)
+
+		mu.Lock()
+		if _, exists := sessionDataSize[sessionID]; !exists {
+			sessionDataSize[sessionID] = map[string]int64{"request_size": 0, "response_size": 0}
+		}
+		sessionDataSize[sessionID]["request_size"] += requestSize
+		sessionDataSize[sessionID]["response_size"] += wrappedWriter.writtenBytes
+		mu.Unlock()
+	})
+}
+
+// Capture Request Size
+func getRequestSize(r *http.Request) int {
+	requestSize := 0
+	if r.ContentLength > 0 {
+		requestSize = int(r.ContentLength)
+	}
+	for key, values := range r.Header {
+		for _, value := range values {
+			requestSize += len(key) + len(value)
+		}
+	}
+	return requestSize
+}
+
 
 // Get IP Address of Request
 func getIPAddress(r *http.Request) string {
@@ -47,17 +103,12 @@ func sseHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Transfer-Encoding", "chunked")
-	w.Header().Set("Content-Encoding", "identity")
 
 	clientChannel := make(chan string)
-
-	// Register the client
 	mu.Lock()
 	sseClients[clientChannel] = struct{}{}
 	mu.Unlock()
 
-	// Cleanup client on close
 	defer func() {
 		mu.Lock()
 		delete(sseClients, clientChannel)
@@ -65,13 +116,11 @@ func sseHandler(w http.ResponseWriter, r *http.Request) {
 		close(clientChannel)
 	}()
 
-	// Send updates to the client
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case msg := <-clientChannel:
-			// Send the message to the client as an SSE message
 			jsonData, err := json.Marshal(msg)
 			if err != nil {
 				log.Println("Error marshaling data to JSON:", err)
@@ -83,12 +132,10 @@ func sseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Notify SSE clients when there's an update in active sessions
+// Notify SSE clients when there's an update
 func notifySSEClients(msg string) {
 	mu.Lock()
 	defer mu.Unlock()
-
-	// Send the message to all connected SSE clients
 	for client := range sseClients {
 		client <- msg
 	}
@@ -100,9 +147,8 @@ func setActivePage(w http.ResponseWriter, r *http.Request) {
 	page := r.URL.Query().Get("page")
 	ip := getIPAddress(r)
 
-	// Get the timeout from query params, default to 5 seconds if not provided
 	timeoutParam := r.URL.Query().Get("timeout")
-	timeout := 5 * time.Second // default timeout is 5 seconds
+	timeout := 5 * time.Second
 	if timeoutParam != "" {
 		parsedTimeout, err := strconv.Atoi(timeoutParam)
 		if err == nil {
@@ -111,27 +157,21 @@ func setActivePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mu.Lock()
-
-	// Store session details
 	sessionPages[sessionID] = page
 	activeSessions[sessionID] = time.Now().UTC()
 	sessionIPs[sessionID] = ip
+	sessionDataSize[sessionID] = map[string]int64{"request_size": 0, "response_size": 0}
 
-	// Cancel any previous timeout if the session already exists
 	if ch, exists := timeoutChannels[sessionID]; exists {
-		close(ch) // Cancel previous timeout
+		close(ch)
 	}
 
-	// Create a new channel for the session timeout
 	timeoutCh := make(chan struct{})
 	timeoutChannels[sessionID] = timeoutCh
-
 	mu.Unlock()
 
-	// Notify all connected SSE clients
 	notifySSEClients(fmt.Sprintf("Session updated: %s - Page: %s - IP: %s", sessionID, page, ip))
 
-	// Set a timeout to remove the session
 	go func() {
 		select {
 		case <-time.After(timeout):
@@ -139,6 +179,7 @@ func setActivePage(w http.ResponseWriter, r *http.Request) {
 			delete(sessionPages, sessionID)
 			delete(activeSessions, sessionID)
 			delete(sessionIPs, sessionID)
+			delete(sessionDataSize, sessionID)
 			delete(timeoutChannels, sessionID)
 			mu.Unlock()
 
@@ -152,17 +193,19 @@ func setActivePage(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Active page updated"))
 }
 
-// Admin API: Get Active Sessions
+// Admin API: Get Active Sessions with Data Size
 func getActiveSessions(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	sessions := []map[string]string{}
+	sessions := []map[string]interface{}{}
 	for sessionID, page := range sessionPages {
-		sessions = append(sessions, map[string]string{
-			"session_id": sessionID,
-			"page":       page,
-			"ip":         sessionIPs[sessionID],
+		sessions = append(sessions, map[string]interface{}{
+			"session_id":   sessionID,
+			"page":         page,
+			"ip":           sessionIPs[sessionID],
+			"request_size": sessionDataSize[sessionID]["request_size"],
+			"response_size": sessionDataSize[sessionID]["response_size"],
 		})
 	}
 
@@ -171,18 +214,20 @@ func getActiveSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	http.HandleFunc("/", homeHandler)
-	http.HandleFunc("/sse", sseHandler)
-	http.HandleFunc("/set_active", setActivePage)
-	http.HandleFunc("/admin/sessions", getActiveSessions)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", homeHandler)
+	mux.HandleFunc("/sse", sseHandler)
+	mux.HandleFunc("/set_active", setActivePage)
+	mux.HandleFunc("/admin/sessions", getActiveSessions)
 
 	log.Println("Switch Service Running on :http://localhost:6748")
 
-	// Enable CORS
-	http.ListenAndServe(":6748", cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173"}, // Allow frontend URL
+	handler := cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:5173"},
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type"},
 		AllowCredentials: true,
-	}).Handler(http.DefaultServeMux))
+	}).Handler(trackTrafficSize(mux))
+
+	http.ListenAndServe(":6748", handler)
 }

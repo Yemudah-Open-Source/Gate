@@ -19,6 +19,8 @@
                         <th class="p-2">Session ID</th>
                         <th class="p-2">Page</th>
                         <th class="p-2">IP Address</th>
+                        <th class="p-2">Request Size (Bytes)</th>
+                        <th class="p-2">Response Size (Bytes)</th>
                     </tr>
                 </thead>
                 <tbody id="session-list"></tbody>
@@ -57,11 +59,14 @@
                             <td class="p-2">${session.session_id}</td>
                             <td class="p-2">${session.page}</td>
                             <td class="p-2">${session.ip}</td>
+                            <td class="p-2">${session.request_size}</td>
+                            <td class="p-2">${session.response_size}</td>
                         `;
                         list.appendChild(tr);
                     });
                 });
         }
+        
 
         function fetchRouteStats() {
             fetch('/admin/routes')
