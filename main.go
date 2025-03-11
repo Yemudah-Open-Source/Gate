@@ -7,10 +7,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
-
-	"strconv"
 
 	"github.com/rs/cors"
 )
@@ -26,7 +25,7 @@ var timeoutChannels = make(map[string]chan struct{})
 // SSE event channels to push updates to the frontend
 var sseClients = make(map[chan<- string]struct{})
 
-// Load HTML template
+// Load HTML templates
 var templates = template.Must(template.ParseFiles("templates/index.html"))
 
 // Get IP Address of Request
@@ -38,21 +37,9 @@ func getIPAddress(r *http.Request) string {
 	return ip
 }
 
+// Serve HTML Page
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-	mu.Lock()
-	sessions := []map[string]string{}
-	for sessionID, page := range sessionPages {
-		sessions = append(sessions, map[string]string{
-			"session_id": sessionID,
-			"page":       page,
-		})
-	}
-	mu.Unlock()
-
-	err := templates.ExecuteTemplate(w, "index.html", sessions)
-	if err != nil {
-		http.Error(w, "Error rendering template", http.StatusInternalServerError)
-	}
+	templates.Execute(w, nil)
 }
 
 // SSE Event Handler
@@ -117,7 +104,6 @@ func setActivePage(w http.ResponseWriter, r *http.Request) {
 	timeoutParam := r.URL.Query().Get("timeout")
 	timeout := 5 * time.Second // default timeout is 5 seconds
 	if timeoutParam != "" {
-		// Parse the timeout value from the query parameter
 		parsedTimeout, err := strconv.Atoi(timeoutParam)
 		if err == nil {
 			timeout = time.Duration(parsedTimeout) * time.Second
@@ -126,7 +112,7 @@ func setActivePage(w http.ResponseWriter, r *http.Request) {
 
 	mu.Lock()
 
-	// Set the session page and the current time
+	// Store session details
 	sessionPages[sessionID] = page
 	activeSessions[sessionID] = time.Now().UTC()
 	sessionIPs[sessionID] = ip
@@ -142,10 +128,10 @@ func setActivePage(w http.ResponseWriter, r *http.Request) {
 
 	mu.Unlock()
 
-	// Notify all connected SSE clients that a new session page was updated
-	notifySSEClients(fmt.Sprintf("Session updated: %s - Page: %s", sessionID, page))
+	// Notify all connected SSE clients
+	notifySSEClients(fmt.Sprintf("Session updated: %s - Page: %s - IP: %s", sessionID, page, ip))
 
-	// Set a timeout to remove the session after the specified duration asynchronously
+	// Set a timeout to remove the session
 	go func() {
 		select {
 		case <-time.After(timeout):
@@ -156,10 +142,9 @@ func setActivePage(w http.ResponseWriter, r *http.Request) {
 			delete(timeoutChannels, sessionID)
 			mu.Unlock()
 
-			// Notify all connected SSE clients that the session was removed
 			notifySSEClients(fmt.Sprintf("Session timed out: %s", sessionID))
 
-		case <-timeoutCh: // Channel closes if the session is updated before timeout
+		case <-timeoutCh:
 			return
 		}
 	}()
@@ -177,6 +162,7 @@ func getActiveSessions(w http.ResponseWriter, r *http.Request) {
 		sessions = append(sessions, map[string]string{
 			"session_id": sessionID,
 			"page":       page,
+			"ip":         sessionIPs[sessionID],
 		})
 	}
 

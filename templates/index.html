@@ -3,22 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Active Sessions</title>
+    <title>Admin Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-100 flex justify-center items-center min-h-screen">
-    <div class="max-w-2xl w-full bg-white shadow-lg rounded-lg p-6">
-        <h1 class="text-2xl font-bold text-gray-800 mb-4">Active Sessions</h1>
-        <table class="w-full text-left border-collapse">
-            <thead>
-                <tr>
-                    <th class="p-2 border-b border-gray-300">Session ID</th>
-                    <th class="p-2 border-b border-gray-300">Page</th>
-                    <th class="p-2 border-b border-gray-300">IP Address</th>
-                </tr>
-            </thead>
-            <tbody id="session-list"></tbody>
-        </table>
+<body class="bg-gray-900 text-gray-200 font-sans">
+    <div class="container mx-auto p-6">
+        <h1 class="text-3xl font-bold text-white mb-6">Admin Dashboard</h1>
+
+        <!-- Active Sessions Table -->
+        <div class="bg-gray-800 shadow-md rounded-lg p-4 mb-6">
+            <h2 class="text-xl font-semibold mb-4">Active Sessions</h2>
+            <table class="w-full text-left">
+                <thead class="bg-gray-700">
+                    <tr>
+                        <th class="p-2">Session ID</th>
+                        <th class="p-2">Page</th>
+                        <th class="p-2">IP Address</th>
+                    </tr>
+                </thead>
+                <tbody id="session-list"></tbody>
+            </table>
+        </div>
+
+        <!-- Route Access Table -->
+        <div class="bg-gray-800 shadow-md rounded-lg p-4">
+            <h2 class="text-xl font-semibold mb-4">Route Access Statistics</h2>
+            <table class="w-full text-left">
+                <thead class="bg-gray-700">
+                    <tr>
+                        <th class="p-2">Route</th>
+                        <th class="p-2">Daily</th>
+                        <th class="p-2">Weekly</th>
+                        <th class="p-2">Monthly</th>
+                        <th class="p-2">Yearly</th>
+                    </tr>
+                </thead>
+                <tbody id="route-list"></tbody>
+            </table>
+        </div>
     </div>
 
     <script>
@@ -30,18 +52,45 @@
                     list.innerHTML = '';
                     sessions.forEach(session => {
                         const tr = document.createElement('tr');
+                        tr.classList.add("bg-gray-700", "hover:bg-gray-600");
                         tr.innerHTML = `
-                            <td class="p-2 border-b border-gray-300">${session.session_id}</td>
-                            <td class="p-2 border-b border-gray-300">${session.page}</td>
-                            <td class="p-2 border-b border-gray-300">${session.ip}</td>
+                            <td class="p-2">${session.session_id}</td>
+                            <td class="p-2">${session.page}</td>
+                            <td class="p-2">${session.ip}</td>
                         `;
                         list.appendChild(tr);
                     });
                 });
         }
 
-        setInterval(fetchSessions, 5000);
+        function fetchRouteStats() {
+            fetch('/admin/routes')
+                .then(response => response.json())
+                .then(routes => {
+                    const list = document.getElementById('route-list');
+                    list.innerHTML = '';
+                    Object.keys(routes).forEach(route => {
+                        const tr = document.createElement('tr');
+                        tr.classList.add("bg-gray-700", "hover:bg-gray-600");
+                        tr.innerHTML = `
+                            <td class="p-2">${route}</td>
+                            <td class="p-2">${routes[route].daily}</td>
+                            <td class="p-2">${routes[route].weekly}</td>
+                            <td class="p-2">${routes[route].monthly}</td>
+                            <td class="p-2">${routes[route].yearly}</td>
+                        `;
+                        list.appendChild(tr);
+                    });
+                });
+        }
+
+        setInterval(() => {
+            fetchSessions();
+            fetchRouteStats();
+        }, 5000);
+
         fetchSessions();
+        fetchRouteStats();
     </script>
 </body>
 </html>
