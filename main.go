@@ -3,17 +3,21 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
 
-	"github.com/rs/cors"
 	"strconv"
+
+	"github.com/rs/cors"
 )
 
 var activeSessions = make(map[string]time.Time) // sessionID -> timestamp of last active page change
 var sessionPages = make(map[string]string)      // sessionID -> active page
+var sessionIPs = make(map[string]string)        // sessionID -> IP address
 var mu sync.Mutex
 
 // Timeout channels to handle cancellation of individual session timeouts
@@ -21,6 +25,35 @@ var timeoutChannels = make(map[string]chan struct{})
 
 // SSE event channels to push updates to the frontend
 var sseClients = make(map[chan<- string]struct{})
+
+// Load HTML template
+var templates = template.Must(template.ParseFiles("templates/index.html"))
+
+// Get IP Address of Request
+func getIPAddress(r *http.Request) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
+func homeHandler(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	sessions := []map[string]string{}
+	for sessionID, page := range sessionPages {
+		sessions = append(sessions, map[string]string{
+			"session_id": sessionID,
+			"page":       page,
+		})
+	}
+	mu.Unlock()
+
+	err := templates.ExecuteTemplate(w, "index.html", sessions)
+	if err != nil {
+		http.Error(w, "Error rendering template", http.StatusInternalServerError)
+	}
+}
 
 // SSE Event Handler
 func sseHandler(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +111,7 @@ func notifySSEClients(msg string) {
 func setActivePage(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("session_id")
 	page := r.URL.Query().Get("page")
+	ip := getIPAddress(r)
 
 	// Get the timeout from query params, default to 5 seconds if not provided
 	timeoutParam := r.URL.Query().Get("timeout")
@@ -95,6 +129,7 @@ func setActivePage(w http.ResponseWriter, r *http.Request) {
 	// Set the session page and the current time
 	sessionPages[sessionID] = page
 	activeSessions[sessionID] = time.Now().UTC()
+	sessionIPs[sessionID] = ip
 
 	// Cancel any previous timeout if the session already exists
 	if ch, exists := timeoutChannels[sessionID]; exists {
@@ -117,6 +152,7 @@ func setActivePage(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			delete(sessionPages, sessionID)
 			delete(activeSessions, sessionID)
+			delete(sessionIPs, sessionID)
 			delete(timeoutChannels, sessionID)
 			mu.Unlock()
 
@@ -149,6 +185,7 @@ func getActiveSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/sse", sseHandler)
 	http.HandleFunc("/set_active", setActivePage)
 	http.HandleFunc("/admin/sessions", getActiveSessions)
