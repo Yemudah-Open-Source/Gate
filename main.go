@@ -176,10 +176,10 @@ func main() {
 	http.HandleFunc("/set_active", setActivePage)
 	http.HandleFunc("/admin/sessions", getActiveSessions)
 
-	log.Println("Switch Service Running on :8080")
+	log.Println("Switch Service Running on :http://localhost:6748")
 
 	// Enable CORS
-	http.ListenAndServe(":8080", cors.New(cors.Options{
+	http.ListenAndServe(":6748", cors.New(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:5173"}, // Allow frontend URL
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type"},

@@ -1,12 +1,9 @@
 import requests
-import time
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-SWITCH_SERVER = "http://localhost:8080"
-
-# Simulate sending updates
+GATE_SERVER = "http://localhost:6748"
 
 
 @app.route("/set_dashboard_active", methods=["GET"])
@@ -31,7 +28,7 @@ def set_page_active(page, timeout, session_id):
 
     # Notify Switch that the page is active with the specific timeout
     try:
-        response = requests.post(f"{SWITCH_SERVER}/set_active", params={"session_id": session_id, "page": page, "timeout": timeout})
+        response = requests.post(f"{GATE_SERVER}/set_active", params={"session_id": session_id, "page": page, "timeout": timeout})
         if response.status_code == 200:
             return jsonify({"page": page, "timeout": timeout, "status": "success"}), 200
         else:
